@@ -1,23 +1,53 @@
+#!/usr/bin/env python3
+
+# Author: Vaux Gomes
+# Contact: vauxgomes@gmail.com
+# Version: 1.0
+
 # Modules
 import os
 import subprocess
 import uuid
-import json
+import pickle
+import logging
 
+from utils import load_data
+from datetime import datetime
 from flask import Flask, request, jsonify
+from werkzeug.utils import secure_filename
 
 # Constants
 API_VERSION = 'Beta'
 API_NAME = 'Valet'
-API_OUTPUT_DIR = '.tmp/'
-JARFILE = 'jar/dummy.jar'
+
+UPLOAD_FOLDER = '.tmp'
+LOGGING_FOLDER = 'logs'
+
+JARFILE = 'jar/cicflowmeter.jar'
+CLFFILE = 'clf/clf.sav'
+LOGFILE = 'logs/flask.log'
+
+COLUMNS = ['Flow IAT Max', 'Fwd IAT Std',
+           'Fwd IAT Max', 'Idle Mean', 'Idle Max']
+
+# Safety
+if not os.path.isdir(UPLOAD_FOLDER):
+    os.mkdir(UPLOAD_FOLDER)
+if not os.path.isdir(LOGGING_FOLDER):
+    os.mkdir(LOGGING_FOLDER)
+
+# -----------------------------------------------------------
+# Main objects
+# -----------------------------------------------------------
 
 # APP
 app = Flask(API_NAME)
 
-# Segurança
-if not os.path.isdir(API_OUTPUT_DIR):
-    os.mkdir(API_OUTPUT_DIR)
+# Classifier
+clf = pickle.load(open(CLFFILE, 'rb'))
+
+# Logger
+logging.basicConfig(filename=LOGFILE, level=logging.DEBUG)
 
 # -----------------------------------------------------------
 # Routes
@@ -59,39 +89,66 @@ def sys():
 
 @app.route('/run', methods=['POST'])
 def run():
-    # Arquivo temporário
-    temp = f'{API_OUTPUT_DIR}{uuid.uuid1()}.tmp'
+    logging.info(f'Classification requested on {datetime.now()}')
 
-    # Carregando array de argumentos do CICFlowMeter
-    instance = json.loads(request.data.decode('utf-8'))
+    if 'file' not in request.files:
+        return {'success': False, 'msg': 'File not found'}
 
-    # Salvando instância em arquivo
-    with open(temp, 'w') as handler:
-        handler.write(','.join(instance))
+    file = request.files['file']
+    if not file.filename.endswith('.pcap'):
+        return {'success': False, 'msg': 'Wrong extension'}
 
-    # Log
-    print(f'[LOG]: Instância: {instance}')
-    print(f'[LOG]: Arquivo: {temp}')
+    _ = secure_filename(file.filename)
 
-    # Montando o comando que chama o CICFlowMeter
-    cmd = ['java', '-jar', JARFILE]
-    cmd.extend(instance)  # Argumentos do CICFlowMeter
+    pcap_filename = f'{uuid.uuid1()}-{file.filename}'
+    pcap_path = os.path.join(UPLOAD_FOLDER, pcap_filename)
+    pcap_flow = f'{pcap_path}_Flow.csv'
 
-    # Executando o comando
-    rel = subprocess.run(cmd, stdout=subprocess.PIPE)
+    file.save(pcap_path)
 
-    # Tratamento da saída
-    rel = rel.stdout.decode('utf-8')
-    rel = rel.strip().split('\n')  # TODO
+    logging.debug(f'Pcap created: {pcap_filename}')
 
-    # Chamando o classificador
-    CLS = None
+    try:
+        # CICFlowMeter Command
+        cmd = ['java', '-jar', JARFILE, pcap_path, UPLOAD_FOLDER]
 
-    # Removendo arquivos temporários
-    os.remove(temp)
+        # Execution
+        rel = subprocess.run(cmd, stdout=subprocess.PIPE)
 
-    # Retorno para o usuário
-    return jsonify({'res': rel})
+        # Decoding
+        rel = rel.stdout.decode('utf-8')
+
+        if not rel.find('is done'):
+            return {'success': False, 'msg': 'File not processed'}
+
+        logging.debug(f'Pcap processed: {pcap_filename}')
+    except:
+        logging.error(f'Error while converting Pcap')
+
+        try:
+            os.remove(pcap_path)
+            os.remove(pcap_flow)
+        except:
+            pass
+
+        return {'success': False, 'msg': 'Error while processing your file'}
+
+    # Loading CICFlowMeter's output
+    X = load_data(data_path=pcap_flow, columns=COLUMNS)
+    logging.debug(f'Flow read: {pcap_filename}')
+
+    # Gettting predictions
+    predictions = clf.predict(X)
+
+    # Removing temporary files
+    os.remove(pcap_path)
+    os.remove(pcap_flow)
+
+    # Return
+    return jsonify({
+        'success': True,
+        'predictions': predictions.tolist()
+    })
 
 # -----------------------------------------------------------
 # Main
@@ -100,3 +157,5 @@ def run():
 
 if __name__ == '__main__':
     app.run()
+
+# https://flask.palletsprojects.com/en/2.0.x/patterns/fileuploads/

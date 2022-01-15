@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # Author: Vaux Gomes
 # Contact: vauxgomes@gmail.com
 # Version: 1.0
