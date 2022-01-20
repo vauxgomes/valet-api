@@ -30,6 +30,9 @@ LOGFILE = 'logs/flask.log'
 COLUMNS = ['Flow IAT Max', 'Fwd IAT Std',
            'Fwd IAT Max', 'Idle Mean', 'Idle Max']
 
+CLASSES = ['BENIGN', 'DoS Hulk', 'DoS slowloris', 
+'DoS GoldenEye', 'DoS Slowhttptest', 'Heartbleed']
+
 # Safety
 if not os.path.isdir(UPLOAD_FOLDER):
     os.mkdir(UPLOAD_FOLDER)
@@ -82,7 +85,7 @@ def help():
     })
 
 
-@app.route('/', methods=['GET'])
+@app.route('/sys', methods=['GET'])
 def sys():
     return jsonify({'version': API_VERSION, 'name': API_NAME})
 
@@ -147,13 +150,12 @@ def run():
     # Return
     return jsonify({
         'success': True,
-        'predictions': predictions.tolist()
+        'predictions': [CLASSES[i] for i in predictions.tolist()]
     })
 
 # -----------------------------------------------------------
 # Main
 # -----------------------------------------------------------
-
 
 if __name__ == '__main__':
     app.run()
